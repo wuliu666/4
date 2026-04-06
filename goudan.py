@@ -171,7 +171,7 @@ def start_wake_word_detection():
             # 获取模型名称键（防止路径差异导致 key 匹配失败）
             model_key = list(prediction.keys())[0]
             
-            if prediction[model_key] > 0.5:
+            if prediction[model_key] > 0.2:
                 print(f"\n🚀 捕捉到唤醒词 [{model_key}]!")
                 # 【流控】：挂起监听，释放麦克风给录音模块
                 stream.stop_stream()
