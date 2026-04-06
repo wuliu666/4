@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 import os
 import sys
 import types
@@ -187,6 +187,3 @@ if __name__ == "__main__":
         start_wake_word_detection()
     except KeyboardInterrupt:
         print("\n系统已关闭")
-=======
-11111
->>>>>>> 252442f88e1fc37e17f11b332e97a96b3618a765
