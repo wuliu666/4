@@ -186,4 +186,4 @@ if __name__ == "__main__":
     try:
         start_wake_word_detection()
     except KeyboardInterrupt:
-        print("\n系统已关闭")
+        print("\n系统已关")
