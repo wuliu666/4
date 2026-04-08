@@ -84,11 +84,33 @@ def ask_claw(text):
         messages = [{"role": "user", "content": text}]
 
     try:
-        res = requests.post(OPENCLAW_API_URL, json={"model": "openclaw-vision", "messages": messages}, headers={"Content-Type": "application/json"})
-        reply = res.json()["choices"][0]["message"]["content"]
-        speak(reply)
+        # 添加 60 秒超时限制，防止大脑卡死导致程序假死
+        res = requests.post(OPENCLAW_API_URL, json={"model": "openclaw-vision", "messages": messages}, headers={"Content-Type": "application/json"}, timeout=60)
+        
+        # 🛑 拦截器：如果状态码不是 200 (成功)，直接把 OpenClaw 的真实报错打印出来
+        if res.status_code != 200:
+            print(f"\n❌ OpenClaw 拒绝了请求！状态码: {res.status_code}")
+            print(f"📄 真实报错内容: {res.text}")
+            speak("抱歉，我的大脑服务器返回了错误状态。")
+            return
+            
+        try:
+            # 尝试解析正常的 JSON 回复
+            res_data = res.json()
+            reply = res_data["choices"][0]["message"]["content"]
+            speak(reply)
+        except Exception as json_e:
+            # 🛑 拦截器：如果是 200 但依然解析失败，打印出它到底传回了什么鬼东西
+            print(f"\n❌ JSON 解析失败: {json_e}")
+            print(f"📦 OpenClaw 传回的原始乱码是: {res.text}")
+            speak("抱歉，大脑传回了无法解析的数据。")
+
+    except requests.exceptions.ConnectionError:
+        print("\n❌ 致命连接错误：目标计算机积极拒绝。请检查 OpenClaw 是否真的启动了，或者 18789 端口是否正确！")
+        speak("抱歉，大脑中枢完全失联，请检查服务端是否启动。")
     except Exception as e:
-        print(f"OpenClaw 链接失败: {e}")
+        print(f"\n❌ 其他未知链接失败: {e}")
+        speak("抱歉，链接大脑时发生了未知错误。")
 
 def listen_after_wake():
     # device_index=None 自动使用系统默认麦克风
