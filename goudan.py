@@ -43,9 +43,9 @@ SILICON_API_KEY = "sk-sipxazdnkxifppxcuhtnnwqlhqpskgkoxbpvssmwdecypyra"
 OPENCLAW_API_URL = "http://127.0.0.1:18789/v1/chat/completions"
 SOVITS_URL = "http://127.0.0.1:9880"
 
-# 动态获取模型路径（解决路径中可能存在的中文或空格问题）
+# 动态获取模型路径（已更换为更高灵敏度的 Jarvis 模型）
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-WAKE_WORD_PATH = os.path.join(BASE_DIR, "models", "alexa_v0.1.tflite").replace("\\", "/")
+WAKE_WORD_PATH = os.path.join(BASE_DIR, "models", "hey_jarvis_v0.1.tflite").replace("\\", "/")
 MELSPEC_PATH = os.path.join(BASE_DIR, "models", "melspectrogram.tflite").replace("\\", "/")
 EMBED_PATH = os.path.join(BASE_DIR, "models", "embedding_model.tflite").replace("\\", "/")
 
@@ -120,67 +120,114 @@ def start_wake_word_detection():
     # 🛡️ 模型文件存在性拦截
     for p in [WAKE_WORD_PATH, MELSPEC_PATH, EMBED_PATH]:
         if not os.path.exists(p):
-            print(f"❌ 关键模型缺失: {p}")
+            print(f"❌ 关键模型缺失: {p}\n请确保你已经下载了该模型并放入 models 文件夹！")
             return
 
-    P = pyaudio.PyAudio()
-    # 自动获取当前 Windows 默认输入设备
-    try:
-        dev_info = P.get_default_input_device_info()
-        print(f"🎤 自动挂载默认麦克风: {dev_info.get('name', 'Unknown')}")
-    except Exception:
-        print("❌ 找不到默认麦克风，请检查 Windows 声音设置。")
-        return
-
-    hw_channels = max(int(dev_info.get('maxInputChannels', 1)), 1)
-    
-    # 适配采样率启动流
-    stream = None
-    actual_rate = 16000
-    for rate in [16000, 44100, 48000]:
-        try:
-            stream = P.open(format=pyaudio.paInt16, channels=hw_channels, rate=rate, input=True, input_device_index=None, frames_per_buffer=int(1280*(rate/16000)))
-            actual_rate = rate
-            print(f"✅ 麦克风已激活 (采样率: {rate}Hz)")
-            break
-        except: continue
-
-    if not stream: return
-
-    # 初始化唤醒模型，显式接管特征提取路径
+    # 初始化唤醒模型 (提到外层，避免反复加载耗费内存)
     oww_model = Model(
         wakeword_models=[WAKE_WORD_PATH], 
         melspec_model_path=MELSPEC_PATH,
         embedding_model_path=EMBED_PATH,
         inference_framework="tflite"
     )
-    
-    print(f"\n==============================================")
-    print(f"✨ 终极系统已就绪！请大声说出唤醒词...")
-    print(f"==============================================")
 
+    # 外层循环：负责自适应扫描并锁定最优麦克风设备
     while True:
-        try:
-            raw_data = stream.read(int(1280*(actual_rate/16000)), exception_on_overflow=False)
-            audio_data = np.frombuffer(raw_data, dtype=np.int16)
-            # 音频降采样与通道合并
-            if hw_channels > 1: audio_data = audio_data[::hw_channels]
-            if actual_rate != 16000: audio_data = audio_data[::(actual_rate // 16000)]
-            
-            prediction = oww_model.predict(audio_data)
-            # 获取模型名称键（防止路径差异导致 key 匹配失败）
-            model_key = list(prediction.keys())[0]
-            
-            if prediction[model_key] > 0.2:
-                print(f"\n🚀 捕捉到唤醒词 [{model_key}]!")
-                # 【流控】：挂起监听，释放麦克风给录音模块
-                stream.stop_stream()
-                listen_after_wake()
-                # 恢复监听
-                stream.start_stream()
-                print(f"\n✨ 重新进入监听状态...")
-        except Exception:
+        P = pyaudio.PyAudio()
+        target_device_index = None
+        target_device_name = "Unknown"
+        hw_channels = 1
+        
+        # 智能设备探针：遍历系统所有设备，优先抢占 USB 或外接麦克风
+        for i in range(P.get_device_count()):
+            info = P.get_device_info_by_index(i)
+            if info.get('maxInputChannels') > 0:
+                name = info.get('name', '').lower()
+                # 屏蔽电脑内部的虚拟混音通道
+                if "mapper" in name or "mix" in name or "映射" in name or "混音" in name:
+                    continue
+                # 发现外接设备，立即锁定
+                if "usb" in name or "external" in name:
+                    target_device_index = i
+                    target_device_name = info.get('name')
+                    hw_channels = int(info.get('maxInputChannels'))
+                    break
+        
+        # 如果没外接设备，使用系统默认的有效麦克风
+        if target_device_index is None:
+            try:
+                default_info = P.get_default_input_device_info()
+                target_device_index = default_info['index']
+                target_device_name = default_info.get('name')
+                hw_channels = int(default_info.get('maxInputChannels', 1))
+            except Exception:
+                print("❌ 未检测到麦克风，请插入设备或检查系统设置。5秒后重试...")
+                time.sleep(5)
+                P.terminate()
+                continue
+
+        print(f"\n🎤 智能路由已挂载设备: [{target_device_name}]")
+
+        # 尝试激活音频流
+        stream = None
+        actual_rate = 16000
+        for rate in [16000, 44100, 48000]:
+            try:
+                stream = P.open(format=pyaudio.paInt16, channels=hw_channels, rate=rate, input=True, input_device_index=target_device_index, frames_per_buffer=int(1280*(rate/16000)))
+                actual_rate = rate
+                print(f"✅ 底层神经流已激活 (采样率: {rate}Hz)")
+                break
+            except: continue
+
+        if not stream:
+            print("❌ 设备被其他程序独占，3秒后重试...")
+            time.sleep(3)
+            P.terminate()
             continue
+
+        print(f"==============================================")
+        print(f"✨ 终极系统就绪！请大声喊出：「Hey Jarvis」")
+        print(f"==============================================")
+
+        # 内层循环：持续捕捉音频数据进行高频检测
+        try:
+            while True:
+                # exception_on_overflow=False 防止爆音引发程序崩溃
+                raw_data = stream.read(int(1280*(actual_rate/16000)), exception_on_overflow=False)
+                audio_data = np.frombuffer(raw_data, dtype=np.int16)
+                
+                # 多通道降维与降采样处理
+                if hw_channels > 1: audio_data = audio_data[::hw_channels]
+                if actual_rate != 16000: audio_data = audio_data[::(actual_rate // 16000)]
+                
+                prediction = oww_model.predict(audio_data)
+                model_key = list(prediction.keys())[0]
+                
+                # 稍微降低判定阈值，提高灵敏度
+                if prediction[model_key] > 0.15:
+                    print(f"\n🚀 捕捉到唤醒词 [{model_key}]!")
+                    
+                    stream.stop_stream()
+                    listen_after_wake()
+                    stream.start_stream()
+                    
+                    # 【核心修复】：清理旧缓冲区，并重置唤醒模型的神经网络记忆
+                    # 彻底解决二次唤醒困难、刚恢复就误触发的 Bug
+                    time.sleep(0.2) 
+                    if stream.get_read_available() > 0:
+                        stream.read(stream.get_read_available(), exception_on_overflow=False)
+                    
+                    oww_model.reset()
+                    print(f"\n✨ 记忆已重置，系统重新潜伏...")
+                    
+        except IOError:
+            # 捕捉设备断开：如果你中途拔掉了 USB 麦克风，它会自动重启扫描寻找新设备
+            print("\n⚠️ 麦克风物理连接断开，正在重新扫描系统硬件...")
+            stream.stop_stream()
+            stream.close()
+            P.terminate()
+            time.sleep(1)
+            break # 退出内层监听，回到外层重新抓取麦克风
 
 if __name__ == "__main__":
     try:
