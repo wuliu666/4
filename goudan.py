@@ -84,8 +84,20 @@ def ask_claw(text):
         messages = [{"role": "user", "content": text}]
 
     try:
+        # 从 openclaw.json 提取的真实认证密钥
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer 2ccb263dccf555577fe42f4d03a5b69df57ee6b471b7cbe6"
+        }
+        
+        # 使用配置中真实挂载的主力模型
+        payload = {
+            "model": "minimax-portal/MiniMax-M2.7", 
+            "messages": messages
+        }
+
         # 添加 60 秒超时限制，防止大脑卡死导致程序假死
-        res = requests.post(OPENCLAW_API_URL, json={"model": "openclaw-vision", "messages": messages}, headers={"Content-Type": "application/json"}, timeout=60)
+        res = requests.post(OPENCLAW_API_URL, json=payload, headers=headers, timeout=60)
         
         # 🛑 拦截器：如果状态码不是 200 (成功)，直接把 OpenClaw 的真实报错打印出来
         if res.status_code != 200:
